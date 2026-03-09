@@ -12,9 +12,9 @@ namespace LilHermes.Abstractions.Entities
         public string ExchangeName { get; set; }
         public RabbitMQExchangeType ExchangeType { get; set; }
         public string[] RoutingKeys { get; set; }
-        public AcknowledgeMode AcknowledgeMode { get; set; } = AcknowledgeMode.Auto;
+        public AcknowledgeMode AcknowledgeMode { get; set; } = AcknowledgeMode.Manual;
         public ushort PrefetchCount { get; set; } = 100;
-        public bool Durable { get; set; } = false;
+        public bool Durable { get; set; } = true;
         public bool Exclusive { get; set; } = false;
         public bool AutoDelete { get; set; } = false;
         public int MaxRetryCount { get; set; } = 3;

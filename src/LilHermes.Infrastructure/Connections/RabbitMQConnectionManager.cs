@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LilHermes.Abstractions.Entities;
@@ -18,7 +20,7 @@ namespace LilHermes.Infrastructure.Connections
 
         public RabbitMQConnectionManager(MessageBusOptions options, ILogger<RabbitMQConnectionManager> logger)
         {
-             _options = options;
+            _options = options;
             _factory = new ConnectionFactory()
             {
                 HostName = _options.ConnectionOptions.HostName,
@@ -33,6 +35,12 @@ namespace LilHermes.Infrastructure.Connections
                 RequestedChannelMax = _options.ConnectionOptions.RequestedChannelMax,
                 RequestedFrameMax = _options.ConnectionOptions.RequestedFrameMax
             };
+
+            if (!string.IsNullOrEmpty(_options.ConnectionOptions.ConnectionUri))
+            {
+                _factory.Uri = new Uri(_options.ConnectionOptions.ConnectionUri);
+            }
+
             _logger = logger;
         }
 
@@ -44,7 +52,26 @@ namespace LilHermes.Infrastructure.Connections
                 if(_connection == null || !_connection.IsOpen)
                 {
                     _connection?.Dispose();
-                    _connection =  await _factory.CreateConnectionAsync(cancellationToken);
+
+                    if (_options.ConnectionOptions.EnabledCluster && _options.ConnectionOptions.Endpoints.Any())
+                    {
+                        var endpoints = _options.ConnectionOptions.Endpoints
+                            .Select(e =>
+                            {
+                                var parts = e.Split(':');
+                                var host = parts[0];
+                                var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : _options.ConnectionOptions.Port;
+                                return new AmqpTcpEndpoint(host, port);
+                            })
+                            .ToList();
+
+                        _connection = await _factory.CreateConnectionAsync(endpoints, cancellationToken);
+                    }
+                    else
+                    {
+                        _connection = await _factory.CreateConnectionAsync(cancellationToken);
+                    }
+
                     _logger.LogInformation("Connection to RabbitMQ successfully established");
                 }
                 return _connection;

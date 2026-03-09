@@ -78,7 +78,6 @@ namespace LilHermes.IntegrationTests
                     options.PublishOptions.ExchangeType = RabbitMQExchangeType.Topic;
                     options.PublishOptions.Persistent = true;
                     options.PublishOptions.PublisherConfirmationsEnabled = true;
-                    options.PublishOptions.PublisherConfirmations = true;
                     options.ConsumerOptions.ExchangeName = TEST_EXCHANGE;
                     options.ConsumerOptions.ExchangeType = RabbitMQExchangeType.Topic;
                     options.ConsumerOptions.QueueName = TEST_QUEUE;
