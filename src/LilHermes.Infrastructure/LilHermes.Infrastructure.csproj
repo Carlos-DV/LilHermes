@@ -1,12 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
-	  <PackageId>LilHermes</PackageId>
-	  <Version>1.0.0</Version>
-	  <Authors>Carlos-DV</Authors>
-	  <Description>Wrapper ligero para RabbitMQ con soporte para .NET Standard 2.0</Description>
-	  <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>LilHermes</PackageId>
+    <Description>Wrapper ligero de RabbitMQ para .NET Standard 2.0. Publisher/consumer con reintentos, Dead-Letter Queue y trazabilidad distribuida via OpenTelemetry.</Description>
+    <PackageTags>rabbitmq;messaging;dotnet;opentelemetry;dlq;amqp;polly;netstandard</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
