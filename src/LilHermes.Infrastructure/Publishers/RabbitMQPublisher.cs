@@ -1,11 +1,12 @@
-﻿using LilHermes.Abstractions.Entities;
+using LilHermes.Abstractions.Entities;
 using LilHermes.Infrastructure.Interfaces;
 using LilHermes.Infrastructure.Telemetry;
 using LilHermes.Infrastructure.Utils;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.Retry;
 using RabbitMQ.Client;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -26,17 +27,35 @@ namespace LilHermes.Infrastructure.Publishers
         private readonly CreateChannelOptions _createChannelOptions;
         private readonly ILogger<RabbitMQPublisher> _logger;
         private readonly LilHermesTelemetry _telemetry;
+        private readonly ResiliencePipeline _retryPipeline;
+
         public RabbitMQPublisher(MessageBusOptions options, IMessageConnectionManager connectionManager, ILogger<RabbitMQPublisher> logger, LilHermesTelemetry telemetry)
         {
             _options = options;
             _connectionManager = connectionManager;
             _createChannelOptions = new CreateChannelOptions(
-                publisherConfirmationsEnabled: _options.PublishOptions.PublisherConfirmationsEnabled, 
+                publisherConfirmationsEnabled: _options.PublishOptions.PublisherConfirmationsEnabled,
                 publisherConfirmationTrackingEnabled: _options.PublishOptions.PublisherConfirmationsEnabled
             );
             _logger = logger;
             _telemetry = telemetry;
+
+            _retryPipeline = new ResiliencePipelineBuilder()
+                .AddRetry(new RetryStrategyOptions
+                {
+                    MaxRetryAttempts = 3,
+                    Delay = TimeSpan.FromMilliseconds(200),
+                    BackoffType = DelayBackoffType.Exponential,
+                    OnRetry = args =>
+                    {
+                        _logger.LogWarning("Publish retry attempt {AttemptNumber} after {Delay}ms",
+                            args.AttemptNumber + 1, args.RetryDelay.TotalMilliseconds);
+                        return default;
+                    }
+                })
+                .Build();
         }
+
         public async ValueTask DisposeAsync()
         {
             _channelLock?.Dispose();
@@ -53,13 +72,6 @@ namespace LilHermes.Infrastructure.Publishers
 
         public Task PublishAsync<T>(MessageContext<T> message, string routingKey, CancellationToken cancellationToken = default) where T : class
         {
-            if (message is IEnumerable || message is List<T>)
-            {
-                var msg = "Use PublishBatchAsync for collections";
-                _logger.LogError(msg);
-                throw new InvalidOperationException(msg);
-            }
-
             return PublishBatchAsync(new[] { message }, routingKey, cancellationToken);
         }
 
@@ -67,7 +79,9 @@ namespace LilHermes.Infrastructure.Publishers
         {
             if (!messages.Any()) return;
             if (string.IsNullOrEmpty(routingKey)) throw new ArgumentNullException(nameof(routingKey));
-            
+
+            var sw = Stopwatch.StartNew();
+
             using (var batchActivity = _telemetry.ActivitySource.StartActivity(_telemetry.BatchActivity, ActivityKind.Internal))
             {
                 batchActivity?.SetTag(LilHermesTelemetry.MessagingBatchCount, messages.Count());
@@ -98,6 +112,8 @@ namespace LilHermes.Infrastructure.Publishers
                                 MessageId = message.MessageId,
                                 CorrelationId = message.CorrelationId,
                                 Timestamp = new AmqpTimestamp(new DateTimeOffset(message.Timestamp).ToUnixTimeSeconds()),
+                                ContentType = _options.PublishOptions.ContentType,
+                                ContentEncoding = _options.PublishOptions.ContentEncoding,
                                 Headers = new Dictionary<string, object>()
                             };
 
@@ -114,8 +130,9 @@ namespace LilHermes.Infrastructure.Publishers
                             );
 
                             publishTasks.Add(publishTask.AsTask());
+                            _telemetry.MessagesPublished.Add(1);
                             activity?.SetStatus(ActivityStatusCode.Ok);
-                            activity?.AddEvent(new ActivityEvent(LilHermesTelemetry.PublisedhOk));
+                            activity?.AddEvent(new ActivityEvent(LilHermesTelemetry.PublishedOk));
                         }
                     }
                     await PublishToMB(publishTasks, cancellationToken);
@@ -129,6 +146,8 @@ namespace LilHermes.Infrastructure.Publishers
                 finally
                 {
                     _channelLock.Release();
+                    sw.Stop();
+                    _telemetry.PublishDurationMs.Record(sw.Elapsed.TotalMilliseconds);
                 }
             };
         }
@@ -162,11 +181,14 @@ namespace LilHermes.Infrastructure.Publishers
 
             try
             {
-                await Task.WhenAll(publishTasks);
+                await _retryPipeline.ExecuteAsync(async ct =>
+                {
+                    await Task.WhenAll(publishTasks);
+                }, cancellationToken);
             }
-            catch (Exception ex) 
+            catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred during publication");
+                _logger.LogError(ex, "Error occurred during message publication");
                 throw;
             }
             finally

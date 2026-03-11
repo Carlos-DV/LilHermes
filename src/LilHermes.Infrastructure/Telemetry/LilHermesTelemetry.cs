@@ -1,10 +1,10 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
 namespace LilHermes.Infrastructure.Telemetry
 {
     /// <summary>
-    /// Const for telemetry 
+    /// Const for telemetry
     /// </summary>
     public class LilHermesTelemetry
     {
@@ -14,6 +14,13 @@ namespace LilHermes.Infrastructure.Telemetry
         public string PublishActivity { get; }
         public string ConsumeActivity { get; }
         public string ProcessActivity { get; }
+
+        // Metric instruments
+        public Counter<long> MessagesPublished { get; }
+        public Counter<long> MessagesConsumed { get; }
+        public Counter<long> MessagesFailed { get; }
+        public Histogram<double> PublishDurationMs { get; }
+
         public LilHermesTelemetry(string sourceName = "LilHermes")
         {
             ActivitySource = new ActivitySource(sourceName, "1.0.0");
@@ -22,6 +29,12 @@ namespace LilHermes.Infrastructure.Telemetry
             PublishActivity = $"{sourceName}.Publish";
             ConsumeActivity = $"{sourceName}.Consume";
             ProcessActivity = $"{sourceName}.Process";
+
+            // Metrics
+            MessagesPublished = Meter.CreateCounter<long>("messages_published", "messages", "Total messages published");
+            MessagesConsumed = Meter.CreateCounter<long>("messages_consumed", "messages", "Total messages consumed");
+            MessagesFailed = Meter.CreateCounter<long>("messages_failed", "messages", "Total messages that failed processing");
+            PublishDurationMs = Meter.CreateHistogram<double>("publish_duration_ms", "ms", "Duration of publish operations");
         }
         // Tags
         public const string MessagingSystem = "messaging.system";
@@ -38,7 +51,7 @@ namespace LilHermes.Infrastructure.Telemetry
         // RabbitMQ
         public const string RabbitMQ = "rabbitmq";
         // Events
-        public const string PublisedhOk = "Message published";
+        public const string PublishedOk = "Message published";
         public const string ConsumedOk = "Message consumed";
         public const string ProcessOk = "Message processed";
     }

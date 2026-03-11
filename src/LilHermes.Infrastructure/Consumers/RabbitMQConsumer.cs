@@ -1,4 +1,5 @@
-﻿using LilHermes.Abstractions.Entities;
+using LilHermes.Abstractions.Entities;
+using LilHermes.Abstractions.Enums;
 using LilHermes.Infrastructure.Interfaces;
 using LilHermes.Infrastructure.Telemetry;
 using LilHermes.Infrastructure.Utils;
@@ -60,7 +61,7 @@ namespace LilHermes.Infrastructure.Consumers
             if (_channel != null)
             {
                 await _channel.BasicAckAsync(deliveryTag, multiple: false);
-                _logger.LogInformation("The message was accepted");
+                _logger.LogInformation("Message acknowledged successfully");
             }
         }
 
@@ -69,17 +70,34 @@ namespace LilHermes.Infrastructure.Consumers
             if (_channel != null)
             {
                 await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue);
-                _logger.LogWarning("A message could not be accepted");
+                _logger.LogWarning("Message negatively acknowledged");
             }
         }
 
-        public async Task StartConsumingAsync<T>(Func<T, ulong, Task> messageHandler) where T : class
+        public Task StartConsumingAsync<T>(Func<T, ulong, Task> messageHandler, CancellationToken cancellationToken = default) where T : class
         {
             if (messageHandler == null)
                 throw new ArgumentNullException(nameof(messageHandler));
 
+            return StartConsumingInternalAsync<T>(
+                async (context, deliveryTag) => await messageHandler(context.Data, deliveryTag),
+                cancellationToken);
+        }
+
+        public Task StartConsumingWithContextAsync<T>(Func<MessageContext<T>, ulong, Task> messageHandler, CancellationToken cancellationToken = default) where T : class
+        {
+            if (messageHandler == null)
+                throw new ArgumentNullException(nameof(messageHandler));
+
+            return StartConsumingInternalAsync(messageHandler, cancellationToken);
+        }
+
+        private async Task StartConsumingInternalAsync<T>(Func<MessageContext<T>, ulong, Task> messageHandler, CancellationToken cancellationToken) where T : class
+        {
             await EnsureChannelAsync();
             await ConfigureQueueAsync();
+
+            var autoAck = _options.ConsumerOptions.AcknowledgeMode == AcknowledgeMode.Auto;
 
             _consumer = new AsyncEventingBasicConsumer(_channel);
 
@@ -95,21 +113,20 @@ namespace LilHermes.Infrastructure.Consumers
                         var json = Encoding.UTF8.GetString(body);
 
                         var context = JsonSerializer.Deserialize<MessageContext<T>>(json, _jsonOptions);
-                        var message = context?.Data;
 
                         if (context == null)
                         {
-                            _logger.LogInformation("Error deserializing context");
-                            throw new ArgumentException("Error deserializing context");
+                            _logger.LogError("Failed to deserialize message context");
+                            throw new ArgumentException("Failed to deserialize message context");
                         }
 
-                        if (message == null)
+                        if (context.Data == null)
                         {
-                            _logger.LogInformation("Error deserializing message");
-                            throw new ArgumentException("Error deserializing message");
+                            _logger.LogError("Failed to deserialize message data");
+                            throw new ArgumentException("Failed to deserialize message data");
                         }
 
-                        _logger.LogInformation("Message received: {0}", context.MessageId);
+                        _logger.LogInformation("Message received: {MessageId}", context.MessageId);
 
                         // Tags
                         activity?.SetTag(LilHermesTelemetry.MessagingSystem, LilHermesTelemetry.RabbitMQ);
@@ -124,7 +141,7 @@ namespace LilHermes.Infrastructure.Consumers
                             {
                                 processActivity?.SetTag(LilHermesTelemetry.MessagingCorrelationId, context.CorrelationId);
                                 processActivity?.SetTag(LilHermesTelemetry.MessagingMessageId, context.MessageId);
-                                await messageHandler(message, args.DeliveryTag);
+                                await messageHandler(context, args.DeliveryTag);
                                 processActivity?.SetStatus(ActivityStatusCode.Ok);
                                 processActivity?.AddEvent(new ActivityEvent(LilHermesTelemetry.ProcessOk));
                             }
@@ -132,45 +149,68 @@ namespace LilHermes.Infrastructure.Consumers
                             {
                                 processActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                                 processActivity?.AddExceptionCompat(ex);
-                                _logger.LogError("An error occurred in the business logic: {p}", ex.Message);
+                                _logger.LogError(ex, "Error in message handler business logic");
                                 throw;
                             }
                         }
 
+                        _telemetry.MessagesConsumed.Add(1);
                         activity?.SetStatus(ActivityStatusCode.Ok);
                         activity?.AddEvent(new ActivityEvent(LilHermesTelemetry.ConsumedOk));
                     }
                     catch (Exception ex)
                     {
+                        _telemetry.MessagesFailed.Add(1);
 
-                        if (_options.ConsumerOptions.EnableDLQ)
+                        if (!autoAck)
                         {
-                            long deathCount = GetDeathCount(args.BasicProperties.Headers);
-                            if (deathCount >= 3)
+                            if (_options.ConsumerOptions.EnableDLQ)
                             {
-                                _logger.LogCritical("Excessive retries (3). Moved to Parked.");
-                                await PublishToParkedAsync(args);
-                                await AckAsync(args.DeliveryTag);
+                                long deathCount = GetDeathCount(args.BasicProperties.Headers);
+                                if (deathCount >= _options.ConsumerOptions.MaxRetryCount)
+                                {
+                                    _logger.LogCritical("Excessive retries ({MaxRetryCount}). Moved to parked queue", _options.ConsumerOptions.MaxRetryCount);
+                                    await PublishToParkedAsync(args);
+                                    await AckAsync(args.DeliveryTag);
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("Retry {RetryCount} of {MaxRetryCount}. Requeueing message", deathCount + 1, _options.ConsumerOptions.MaxRetryCount);
+                                    await NackAsync(args.DeliveryTag, requeue: false);
+                                }
                             }
                             else
                             {
-                                _logger.LogWarning("Error {0}. Retrying...", deathCount + 1);
-                                await NackAsync(args.DeliveryTag, requeue: false);
+                                await NackAsync(args.DeliveryTag, true);
                             }
-                        }
-                        else
-                        {
-                            await NackAsync(args.DeliveryTag, true);
                         }
 
                         activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                         activity?.AddExceptionCompat(ex);
-                        _logger.LogError("Error processing message: {p}", ex.Message);
+                        _logger.LogError(ex, "Error processing message");
                     }
                 }
             };
 
-            _consumerTag = await _channel.BasicConsumeAsync(queue: _options.ConsumerOptions.QueueName, autoAck: false, consumer: _consumer);
+            _consumerTag = await _channel.BasicConsumeAsync(
+                queue: _options.ConsumerOptions.QueueName,
+                autoAck: autoAck,
+                consumer: _consumer);
+
+            if (cancellationToken != default)
+            {
+                cancellationToken.Register(async () =>
+                {
+                    try
+                    {
+                        await StopConsumingAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error stopping consumer on cancellation");
+                    }
+                });
+            }
         }
 
         public async Task StopConsumingAsync()
@@ -185,6 +225,20 @@ namespace LilHermes.Infrastructure.Consumers
             }
             _consumerTag = null;
             _consumer = null;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await StopConsumingAsync();
+
+            if (_channel != null)
+            {
+                await _channel.CloseAsync();
+                _channel.Dispose();
+                _channel = null;
+            }
+
+            GC.SuppressFinalize(this);
         }
 
         private async Task EnsureChannelAsync()
