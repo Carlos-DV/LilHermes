@@ -1,0 +1,44 @@
+<Project>
+	<PropertyGroup>
+		<!-- Autoría -->
+		<Authors>Carlos-DV</Authors>
+		<Company>Carlos-DV</Company>
+		<Version>1.0.0</Version>
+		<Copyright>Copyright © 2026 Carlos-DV</Copyright>
+		<!-- Repositorio -->
+		<RepositoryUrl>https://github.com/Carlos-DV/LilHermes.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageProjectUrl>https://github.com/Carlos-DV/LilHermes</PackageProjectUrl>
+		<!-- Licencia pública SPDX — requerida por nuget.org -->
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<!-- README visible en nuget.org -->
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<!-- Icono del paquete — coloca assets/icon.png en la raíz del repo (128x128 PNG) -->
+		<PackageIcon Condition="Exists('$(MSBuildThisFileDirectory)..\assets\icon.png')">icon.png</PackageIcon>
+		<!-- Notas de versión -->
+		<PackageReleaseNotes>Versión inicial de LilHermes.</PackageReleaseNotes>
+		<!-- XML docs (IntelliSense para quienes consuman el paquete) -->
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<!-- Símbolos .snupkg para step-through debugging -->
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<!-- Source Link: navegar al código fuente desde el debugger -->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<!-- Builds reproducibles -->
+		<Deterministic>true</Deterministic>
+		<!-- Generar paquete al compilar -->
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+	</PropertyGroup>
+	<!-- Source Link para GitHub -->
+	<ItemGroup>
+		<PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+	</ItemGroup>
+	<ItemGroup>
+		<!-- README incluido en el paquete -->
+		<None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="\" />
+		<!-- Icono incluido en el paquete — REEMPLAZA con tu PNG de 128x128px -->
+		<None Include="$(MSBuildThisFileDirectory)..\assets\icon.png" Pack="true" PackagePath="\"
+			  Condition="Exists('$(MSBuildThisFileDirectory)..\assets\icon.png')" />
+	</ItemGroup>
+</Project>
