@@ -12,6 +12,7 @@ namespace LilHermes.Abstractions.Entities
         public bool Persistent { get; set; } = true;
         public bool PublisherConfirmationsEnabled { get; set; } = true;
         public bool PublisherConfirmations {  get; set; } = true;
+        public int MaxPublishRetries { get; set; } = 3;
         public string ContentType { get; set; } = "application/json";
         public string ContentEncoding { get; set; } = "UTF-8";
         public Dictionary<string, object> Headers { get; set; } = new Dictionary<string, object>();

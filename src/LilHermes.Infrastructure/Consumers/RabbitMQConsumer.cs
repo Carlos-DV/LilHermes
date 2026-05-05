@@ -99,17 +99,17 @@ namespace LilHermes.Infrastructure.Consumers
 
                         if (context == null)
                         {
-                            _logger.LogInformation("Error deserializing context");
+                            _logger.LogError("Error deserializing context");
                             throw new ArgumentException("Error deserializing context");
                         }
 
                         if (message == null)
                         {
-                            _logger.LogInformation("Error deserializing message");
+                            _logger.LogError("Error deserializing message");
                             throw new ArgumentException("Error deserializing message");
                         }
 
-                        _logger.LogInformation("Message received: {0}", context.MessageId);
+                        _logger.LogInformation("Message received: {MessageId}", context.MessageId);
 
                         // Tags
                         activity?.SetTag(LilHermesTelemetry.MessagingSystem, LilHermesTelemetry.RabbitMQ);
@@ -132,7 +132,7 @@ namespace LilHermes.Infrastructure.Consumers
                             {
                                 processActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                                 processActivity?.AddExceptionCompat(ex);
-                                _logger.LogError("An error occurred in the business logic: {p}", ex.Message);
+                                _logger.LogError(ex, "An error occurred in the business logic: {ErrorMessage}", ex.Message);
                                 throw;
                             }
                         }
@@ -154,7 +154,7 @@ namespace LilHermes.Infrastructure.Consumers
                             }
                             else
                             {
-                                _logger.LogWarning("Error {0}. Retrying...", deathCount + 1);
+                                _logger.LogWarning("Error. Retrying attempt {RetryCount}", deathCount + 1);
                                 await NackAsync(args.DeliveryTag, requeue: false);
                             }
                         }
@@ -165,7 +165,7 @@ namespace LilHermes.Infrastructure.Consumers
 
                         activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                         activity?.AddExceptionCompat(ex);
-                        _logger.LogError("Error processing message: {p}", ex.Message);
+                        _logger.LogError(ex, "Error processing message: {ErrorMessage}", ex.Message);
                     }
                 }
             };

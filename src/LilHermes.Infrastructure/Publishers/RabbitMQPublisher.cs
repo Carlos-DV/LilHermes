@@ -4,6 +4,7 @@ using LilHermes.Infrastructure.Telemetry;
 using LilHermes.Infrastructure.Utils;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -55,9 +56,8 @@ namespace LilHermes.Infrastructure.Publishers
         {
             if (message is IEnumerable || message is List<T>)
             {
-                var msg = "Use PublishBatchAsync for collections";
-                _logger.LogError(msg);
-                throw new InvalidOperationException(msg);
+                _logger.LogError("Use PublishBatchAsync for collections");
+                throw new InvalidOperationException("Use PublishBatchAsync for collections");
             }
 
             return PublishBatchAsync(new[] { message }, routingKey, cancellationToken);
@@ -65,72 +65,91 @@ namespace LilHermes.Infrastructure.Publishers
 
         public async Task PublishBatchAsync<T>(IEnumerable<MessageContext<T>> messages, string routingKey, CancellationToken cancellationToken = default) where T : class
         {
-            if (!messages.Any()) return;
+            var messageList = messages.ToList();
+            if (messageList.Count == 0) return;
             if (string.IsNullOrEmpty(routingKey)) throw new ArgumentNullException(nameof(routingKey));
-            
-            using (var batchActivity = _telemetry.ActivitySource.StartActivity(_telemetry.BatchActivity, ActivityKind.Internal))
+
+            var maxRetries = _options.PublishOptions.MaxPublishRetries;
+
+            for (var attempt = 1; attempt <= maxRetries; attempt++)
             {
-                batchActivity?.SetTag(LilHermesTelemetry.MessagingBatchCount, messages.Count());
-                await _channelLock.WaitAsync(cancellationToken);
-                try
+                using (var batchActivity = _telemetry.ActivitySource.StartActivity(_telemetry.BatchActivity, ActivityKind.Internal))
                 {
-                    await EnsureChannelAsync(cancellationToken);
-                    var publishTasks = new List<Task>();
-
-                    foreach (var message in messages)
+                    batchActivity?.SetTag(LilHermesTelemetry.MessagingBatchCount, messageList.Count);
+                    await _channelLock.WaitAsync(cancellationToken);
+                    try
                     {
-                        using (var activity = _telemetry.ActivitySource.StartActivity(_telemetry.PublishActivity, ActivityKind.Producer))
+                        await EnsureChannelAsync(cancellationToken);
+                        var publishTasks = new List<Task>();
+
+                        foreach (var message in messageList)
                         {
-                            var json = JsonSerializer.Serialize(message);
-                            var body = Encoding.UTF8.GetBytes(json);
-
-                            activity?.SetTag(LilHermesTelemetry.MessagingSystem, LilHermesTelemetry.RabbitMQ);
-                            activity?.SetTag(LilHermesTelemetry.MessagingDestination, _options.PublishOptions.Exchange);
-                            activity?.SetTag(LilHermesTelemetry.MessagingRoutingKey, routingKey);
-                            activity?.SetTag(LilHermesTelemetry.MessagingMessageId, message.MessageId);
-                            activity?.SetTag(LilHermesTelemetry.MessagingCorrelationId, message.CorrelationId);
-                            activity?.SetTag(LilHermesTelemetry.MessagingPayloadSize, body.Length);
-                            activity?.SetTag(LilHermesTelemetry.RabbitMQExchange, _options.PublishOptions.ExchangeType.ToRabbitString());
-
-                            var props = new BasicProperties
+                            using (var activity = _telemetry.ActivitySource.StartActivity(_telemetry.PublishActivity, ActivityKind.Producer))
                             {
-                                Persistent = _options.PublishOptions.Persistent,
-                                MessageId = message.MessageId,
-                                CorrelationId = message.CorrelationId,
-                                Timestamp = new AmqpTimestamp(new DateTimeOffset(message.Timestamp).ToUnixTimeSeconds()),
-                                Headers = new Dictionary<string, object>()
-                            };
+                                var json = JsonSerializer.Serialize(message);
+                                var body = Encoding.UTF8.GetBytes(json);
 
-                            if (activity != null)
-                                LilHermesTraceContextHelper.InjectTraceContext(props, activity);
+                                activity?.SetTag(LilHermesTelemetry.MessagingSystem, LilHermesTelemetry.RabbitMQ);
+                                activity?.SetTag(LilHermesTelemetry.MessagingDestination, _options.PublishOptions.Exchange);
+                                activity?.SetTag(LilHermesTelemetry.MessagingRoutingKey, routingKey);
+                                activity?.SetTag(LilHermesTelemetry.MessagingMessageId, message.MessageId);
+                                activity?.SetTag(LilHermesTelemetry.MessagingCorrelationId, message.CorrelationId);
+                                activity?.SetTag(LilHermesTelemetry.MessagingPayloadSize, body.Length);
+                                activity?.SetTag(LilHermesTelemetry.RabbitMQExchange, _options.PublishOptions.ExchangeType.ToRabbitString());
 
-                            ValueTask publishTask = _channel.BasicPublishAsync(
-                                exchange: _options.PublishOptions.Exchange,
-                                routingKey: routingKey,
-                                body: body,
-                                mandatory: false,
-                                basicProperties: props,
-                                cancellationToken: cancellationToken
-                            );
+                                var props = new BasicProperties
+                                {
+                                    Persistent = _options.PublishOptions.Persistent,
+                                    MessageId = message.MessageId,
+                                    CorrelationId = message.CorrelationId,
+                                    Timestamp = new AmqpTimestamp(new DateTimeOffset(message.Timestamp).ToUnixTimeSeconds()),
+                                    Headers = new Dictionary<string, object>()
+                                };
 
-                            publishTasks.Add(publishTask.AsTask());
-                            activity?.SetStatus(ActivityStatusCode.Ok);
-                            activity?.AddEvent(new ActivityEvent(LilHermesTelemetry.PublisedhOk));
+                                if (activity != null)
+                                    LilHermesTraceContextHelper.InjectTraceContext(props, activity);
+
+                                ValueTask publishTask = _channel.BasicPublishAsync(
+                                    exchange: _options.PublishOptions.Exchange,
+                                    routingKey: routingKey,
+                                    body: body,
+                                    mandatory: false,
+                                    basicProperties: props,
+                                    cancellationToken: cancellationToken
+                                );
+
+                                publishTasks.Add(publishTask.AsTask());
+                                activity?.SetStatus(ActivityStatusCode.Ok);
+                                activity?.AddEvent(new ActivityEvent(LilHermesTelemetry.PublisedhOk));
+                            }
                         }
+                        await PublishToMB(publishTasks, cancellationToken);
+                        return;
                     }
-                    await PublishToMB(publishTasks, cancellationToken);
+                    catch (AlreadyClosedException ex) when (attempt < maxRetries)
+                    {
+                        batchActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        batchActivity?.AddExceptionCompat(ex);
+                        _logger.LogWarning(ex, "Channel lost during publish, resetting. Retry {RetryAttempt}/{MaxRetries}", attempt, maxRetries);
+                        _channel?.Dispose();
+                        _channel = null;
+                        _exchangeDeclared = false;
+                    }
+                    catch (Exception ex)
+                    {
+                        batchActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        batchActivity?.AddExceptionCompat(ex);
+                        _logger.LogError(ex, "An error occurred during publication");
+                        throw;
+                    }
+                    finally
+                    {
+                        _channelLock.Release();
+                    }
                 }
-                catch(Exception ex)
-                {
-                    batchActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                    batchActivity?.AddExceptionCompat(ex);
-                    throw;
-                }
-                finally
-                {
-                    _channelLock.Release();
-                }
-            };
+
+                await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken);
+            }
         }
 
         private async Task EnsureChannelAsync(CancellationToken cancellationToken)
@@ -159,15 +178,9 @@ namespace LilHermes.Infrastructure.Publishers
         private async Task PublishToMB(List<Task> publishTasks, CancellationToken cancellationToken)
         {
             if (publishTasks.Count == 0) return;
-
             try
             {
                 await Task.WhenAll(publishTasks);
-            }
-            catch (Exception ex) 
-            {
-                _logger.LogError(ex, "An error occurred during publication");
-                throw;
             }
             finally
             {
