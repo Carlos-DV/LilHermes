@@ -298,7 +298,19 @@ namespace LilHermes.Infrastructure.Consumers
                 };
                 await _channel.ExchangeDeclareAsync(_queueStructure.RetryExchange, _options.ConsumerOptions.ExchangeType.ToRabbitString(), durable: true);
                 await _channel.QueueDeclareAsync(_queueStructure.RetryQueue, durable: true, exclusive: false, autoDelete: false, arguments: retryArgs);
-                await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, "#");
+                // In a direct exchange "#" is not a wildcard: bind the retry queue with the same
+                // routing keys as the main queue so dead-lettered messages are not dropped
+                if (_options.ConsumerOptions.ExchangeType == RabbitMQExchangeType.Direct)
+                {
+                    foreach (var routingKey in _options.ConsumerOptions.RoutingKeys)
+                    {
+                        await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, routingKey);
+                    }
+                }
+                else
+                {
+                    await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, "#");
+                }
 
                 queueArgs = new Dictionary<string, object>
                 {
