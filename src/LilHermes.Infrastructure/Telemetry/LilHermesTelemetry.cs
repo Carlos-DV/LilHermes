@@ -21,10 +21,18 @@ namespace LilHermes.Infrastructure.Telemetry
         public Counter<long> MessagesFailed { get; }
         public Histogram<double> PublishDurationMs { get; }
 
-        public LilHermesTelemetry(string sourceName = "LilHermes")
+        /// <summary>
+        /// Nombre por defecto del ActivitySource y del Meter de LilHermes
+        /// </summary>
+        public const string DefaultSourceName = "LilHermes";
+
+        private static readonly string PackageVersion =
+            typeof(LilHermesTelemetry).Assembly.GetName().Version.ToString(3);
+
+        public LilHermesTelemetry(string sourceName = DefaultSourceName)
         {
-            ActivitySource = new ActivitySource(sourceName, "1.0.0");
-            Meter = new Meter(sourceName, "1.0.0");
+            ActivitySource = new ActivitySource(sourceName, PackageVersion);
+            Meter = new Meter(sourceName, PackageVersion);
             BatchActivity = $"{sourceName}.Batch";
             PublishActivity = $"{sourceName}.Publish";
             ConsumeActivity = $"{sourceName}.Consume";

@@ -194,22 +194,54 @@ options.ConsumerOptions.RetryDelayMs   = 2000;
 options.ConsumerOptions.MessageTTL     = 60000;
 ```
 
-Los mensajes que superan `MaxRetryCount` quedan en la cola `{QueueName}-parked` para inspección manual.
+Los mensajes que superan `MaxRetryCount` quedan en la cola `{QueueName}.error` para inspección manual.
 
 ---
 
 ## OpenTelemetry
 
-LilHermes instrumenta automáticamente las operaciones de publicación y consumo.
+LilHermes instrumenta automáticamente la publicación y el consumo con `System.Diagnostics`
+(`ActivitySource` y `Meter`). No depende de los paquetes de OpenTelemetry: cada servicio usa
+la versión de OpenTelemetry que necesite y registra LilHermes por nombre.
 
-### Registrar trazas
+El nombre es el `SourceName` configurado en `AddLilHermes` (por defecto
+`LilHermesTelemetry.DefaultSourceName`, es decir `"LilHermes"`). Trazas y métricas usan el
+mismo nombre.
+
+### Registrar trazas y métricas
 
 ```csharp
+builder.Services.AddLilHermes(options =>
+{
+    options.SourceName = "MiServicio";
+    // ...
+});
+
 builder.Services.AddOpenTelemetry()
     .WithTracing(tracing => tracing
-        .AddLilHermesInstrumentation()   // <-- añade el ActivitySource
+        .AddSource("MiServicio")   // <-- trazas de LilHermes
+        .AddOtlpExporter())
+    .WithMetrics(metrics => metrics
+        .AddMeter("MiServicio")    // <-- métricas de LilHermes
         .AddOtlpExporter());
 ```
+
+### Migración de 1.x a 2.0
+
+En la 2.0 se eliminó `AddLilHermesInstrumentation` junto con la dependencia de
+`OpenTelemetry.Api` (CVE-2026-40894). Reemplázala por `AddSource` con el mismo `SourceName`
+que configuras en `AddLilHermes`:
+
+```csharp
+// 1.x
+.AddLilHermesInstrumentation("MiServicio")
+// 2.0
+.AddSource("MiServicio")
+```
+
+Si llamabas a `AddLilHermesInstrumentation()` sin argumento, el nombre era `"LilHermes"`:
+comprueba que coincida con tu `SourceName`; si no coincidía, las trazas de LilHermes no se
+estaban exportando.
 
 ### Métricas disponibles
 
