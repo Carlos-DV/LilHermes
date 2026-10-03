@@ -35,7 +35,7 @@ dotnet pack LilHermes.sln -c Release --no-build -o <output-dir>
 
 Two projects ship as NuGet packages (both `netstandard2.0`):
 
-- **`LilHermes.Abstractions`** — pure contracts: `MessageBusOptions` (connection + publish + consume config), `MessageContext<T>` (message envelope with correlation/trace IDs), and enums (`RabbitMQExchangeType`, `AcknowledgeMode`, `MessagePriority`).
+- **`LilHermes.Abstractions`** — pure contracts: `MessageBusOptions` (connection + publish + consume config), `MessageContext<T>` (message envelope with correlation/trace IDs; `Timestamp` in UTC) plus the non-generic static `MessageContext.Create(data, sourceService, messageId)` factory that infers `T`, and enums (`RabbitMQExchangeType`, `AcknowledgeMode`, `MessagePriority`).
 - **`LilHermes.Infrastructure`** — implementations wired via DI extension methods in `LilHermesExtensions`:
   - `AddLilHermes()` — registers publisher + consumer
   - `AddLilHermesPublisher()` — publisher only
@@ -54,13 +54,13 @@ Telemetry has no OpenTelemetry package dependency (removed in 2.0.0): `LilHermes
 
 ### Data Flow
 
-1. Caller creates a `MessageContext<T>` with correlation/trace metadata and calls `IMessagePublisher.PublishAsync()`.
+1. Caller creates a `MessageContext<T>` (usually via `MessageContext.Create`) with correlation/trace metadata and calls `IMessagePublisher.PublishAsync()`.
 2. `RabbitMQPublisher` propagates OTel trace context into AMQP message headers and publishes to the configured exchange.
 3. `RabbitMQConsumer` reads headers to restore trace context, deserializes `MessageContext<T>`, invokes the registered handler.
 4. On handler failure, the message is routed to the DLQ retry queue (up to `MaxRetryCount`, default 3); after exhausting retries it lands in the dead-letter exchange.
 
 ### Testing Notes
 
-- Unit tests (`RabbitMqPublisherTests`, `LilHermesTelemetryTests`) run without external services.
+- Unit tests (`RabbitMqPublisherTests`, `LilHermesTelemetryTests`, `MessageContextTests`) run without external services.
 - Integration tests (`EndToEndTests`, `DlqDirectRetryTests`) require a live RabbitMQ broker at `localhost`. `EndToEndTests` also exports to an OTLP HTTP collector at `http://localhost:4318`, but it passes without one: it asserts the `Publish`/`Consume` activities through an `ActivityListener`. `BatchTest` is commented out.
 - Test projects target `net8.0`; source projects target `netstandard2.0`.
