@@ -6,7 +6,6 @@ using LilHermes.Infrastructure.Interfaces;
 using LilHermes.Infrastructure.Publishers;
 using LilHermes.Infrastructure.Telemetry;
 using Microsoft.Extensions.DependencyInjection;
-using OpenTelemetry.Trace;
 
 namespace LilHermes.Infrastructure.Extensions
 {
@@ -24,7 +23,7 @@ namespace LilHermes.Infrastructure.Extensions
             var opt = new MessageBusOptions();
             messageOptions(opt);
             //config telemetry
-            var telemetry = new LilHermesTelemetry(opt.SourceName ?? "LilHermes");
+            var telemetry = new LilHermesTelemetry(opt.SourceName ?? LilHermesTelemetry.DefaultSourceName);
             services.AddSingleton(opt);
             services.AddSingleton(telemetry);
             services.AddSingleton<IMessageConnectionManager ,RabbitMQConnectionManager>();
@@ -42,7 +41,7 @@ namespace LilHermes.Infrastructure.Extensions
         {
             var opt = new MessageBusOptions();
             messageOptions(opt);
-            var telemetry = new LilHermesTelemetry(opt.SourceName ?? "LilHermes");
+            var telemetry = new LilHermesTelemetry(opt.SourceName ?? LilHermesTelemetry.DefaultSourceName);
             services.AddSingleton(opt);
             services.AddSingleton(telemetry);
             services.AddSingleton<IMessageConnectionManager, RabbitMQConnectionManager>();
@@ -59,20 +58,12 @@ namespace LilHermes.Infrastructure.Extensions
         {
             var opt = new MessageBusOptions();
             messageOptions(opt);
-            var telemetry = new LilHermesTelemetry(opt.SourceName ?? "LilHermes");
+            var telemetry = new LilHermesTelemetry(opt.SourceName ?? LilHermesTelemetry.DefaultSourceName);
             services.AddSingleton(opt);
             services.AddSingleton(telemetry);
             services.AddSingleton<IMessageConnectionManager, RabbitMQConnectionManager>();
             services.AddSingleton<IMessageConsumer, RabbitMQConsumer>();
             return services;
-        }
-        /// <summary>
-        /// Configura OpenTelemetry para LilHermes
-        /// </summary>
-        public static TracerProviderBuilder AddLilHermesInstrumentation(
-            this TracerProviderBuilder builder, string SourceName = "LilHermes")
-        {
-            return builder.AddSource(SourceName);
         }
     }
 }

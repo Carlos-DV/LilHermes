@@ -3,7 +3,7 @@
 		<!-- Autoría -->
 		<Authors>Carlos-DV</Authors>
 		<Company>Carlos-DV</Company>
-		<Version>1.0.0</Version>
+		<Version>2.0.0</Version>
 		<Copyright>Copyright © 2026 Carlos-DV</Copyright>
 		<!-- Repositorio -->
 		<RepositoryUrl>https://github.com/Carlos-DV/LilHermes.git</RepositoryUrl>
@@ -16,7 +16,7 @@
 		<!-- Icono del paquete — coloca assets/icon.png en la raíz del repo (128x128 PNG) -->
 		<PackageIcon Condition="Exists('$(MSBuildThisFileDirectory)..\assets\icon.png')">icon.png</PackageIcon>
 		<!-- Notas de versión -->
-		<PackageReleaseNotes>Versión inicial de LilHermes.</PackageReleaseNotes>
+		<PackageReleaseNotes>2.0.0 — cambio incompatible: se elimina AddLilHermesInstrumentation y la dependencia de OpenTelemetry.Api (CVE-2026-40894). Para registrar la telemetría usa .AddSource(...) / .AddMeter(...) (ver README). Correcciones: los mensajes enviados a reintento con un exchange Direct se perdían; los logs del consumer ahora incluyen MessageId y DeliveryTag y avisan del reintento, de la DLQ y de los errores al enrutar.</PackageReleaseNotes>
 		<!-- XML docs (IntelliSense para quienes consuman el paquete) -->
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<!-- Símbolos .snupkg para step-through debugging -->
