@@ -37,12 +37,40 @@ namespace LilHermes.Abstractions.Entities
         {
             MessageId = Guid.NewGuid().ToString();
             CorrelationId = Guid.NewGuid().ToString();
-            Timestamp = DateTime.Now;
+            Timestamp = DateTime.UtcNow;
             Metadata = new Dictionary<string, string>();
         }
         public MessageContext(T data) : this()
         {
             Data = data;
+        }
+    }
+
+    /// <summary>
+    /// Crea mensajes <see cref="MessageContext{T}"/> listos para publicar
+    /// </summary>
+    public static class MessageContext
+    {
+        /// <summary>
+        /// Crea un mensaje con un CorrelationId nuevo y Timestamp en UTC
+        /// </summary>
+        /// <typeparam name="T">Tipo del contenido</typeparam>
+        /// <param name="data">Contenido del mensaje</param>
+        /// <param name="sourceService">Servicio que envía el mensaje</param>
+        /// <param name="messageId">Id del mensaje; si es null o vacío se genera un GUID</param>
+        /// <exception cref="ArgumentNullException"><paramref name="data"/> es null</exception>
+        /// <exception cref="ArgumentException"><paramref name="sourceService"/> es null o vacío</exception>
+        public static MessageContext<T> Create<T>(T data, string sourceService, string messageId = null) where T : class
+        {
+            if (data == null)
+                throw new ArgumentNullException(nameof(data));
+            if (string.IsNullOrWhiteSpace(sourceService))
+                throw new ArgumentException("sourceService is required", nameof(sourceService));
+
+            var context = new MessageContext<T>(data) { SourceService = sourceService };
+            if (!string.IsNullOrEmpty(messageId))
+                context.MessageId = messageId;
+            return context;
         }
     }
 }

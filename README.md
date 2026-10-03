@@ -108,28 +108,29 @@ builder.Services.AddLilHermesConsumer(options => { ... });
 
 ## Publicar mensajes
 
-Inyecta `IMessagePublisher` y construye un `MessageContext<T>`:
+Inyecta `IMessagePublisher` y crea el mensaje con `MessageContext.Create`:
 
 ```csharp
 public class MiServicio(IMessagePublisher publisher)
 {
     public async Task EnviarPedidoAsync(Pedido pedido, CancellationToken ct)
     {
-        var mensaje = new MessageContext<Pedido>(pedido)
-        {
-            SourceService = "servicio-pedidos",
-            // CorrelationId y MessageId se generan automáticamente
-        };
+        // CorrelationId, MessageId y Timestamp (UTC) se generan automáticamente
+        var mensaje = MessageContext.Create(pedido, "servicio-pedidos");
 
         await publisher.PublishAsync(mensaje, routingKey: "pedidos.nuevo", ct);
     }
 }
 ```
 
+Si el mensaje ya tiene un id propio (por ejemplo, el id del documento), pásalo como tercer
+argumento: `MessageContext.Create(pedido, "servicio-pedidos", pedido.Id.ToString())`.
+Desde la 2.1.0, `Timestamp` se genera en UTC.
+
 ### Publicación en lote
 
 ```csharp
-var mensajes = pedidos.Select(p => new MessageContext<Pedido>(p));
+var mensajes = pedidos.Select(p => MessageContext.Create(p, "servicio-pedidos"));
 await publisher.PublishBatchAsync(mensajes, routingKey: "pedidos.lote", ct);
 ```
 
