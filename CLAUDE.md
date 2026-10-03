@@ -18,14 +18,17 @@ dotnet test LilHermes.sln
 # Run only unit tests
 dotnet test test/LilHermes.UnitTests/LilHermes.UnitTests.csproj
 
-# Run only integration tests (requires a running RabbitMQ + OTLP collector at localhost:4318)
+# Run only integration tests (requires a running RabbitMQ at localhost:5672)
+docker run -d --rm --name lilhermes-rabbit -p 5672:5672 -p 15672:15672 rabbitmq:4-management
 dotnet test test/LilHermes.IntegrationTests/LilHermes.IntegrationTests.csproj
 
 # Run a single test by name
 dotnet test LilHermes.sln --filter "FullyQualifiedName~TestName"
 
-# Build NuGet packages (auto-generated on build via GeneratePackageOnBuild)
-dotnet pack LilHermes.sln
+# Build Release NuGet packages. A plain `dotnet pack -c Release` fails with NU5026
+# (GeneratePackageOnBuild), so build first and pack without rebuilding.
+dotnet build LilHermes.sln -c Release
+dotnet pack LilHermes.sln -c Release --no-build -o <output-dir>
 ```
 
 ## Architecture
@@ -37,7 +40,8 @@ Two projects ship as NuGet packages (both `netstandard2.0`):
   - `AddLilHermes()` — registers publisher + consumer
   - `AddLilHermesPublisher()` — publisher only
   - `AddLilHermesConsumer()` — consumer only
-  - `AddLilHermesInstrumentation()` — OpenTelemetry `ActivitySource` + `Meter`
+
+Telemetry has no OpenTelemetry package dependency (removed in 2.0.0): `LilHermesTelemetry` creates a `System.Diagnostics` `ActivitySource` and `Meter` named after `MessageBusOptions.SourceName` (default `LilHermesTelemetry.DefaultSourceName` = `"LilHermes"`), versioned from the assembly. Consuming services register it with `.AddSource(name)` / `.AddMeter(name)` in their own OpenTelemetry setup.
 
 ### Key Infrastructure Classes
 
@@ -46,7 +50,7 @@ Two projects ship as NuGet packages (both `netstandard2.0`):
 | `RabbitMQConnectionManager` | Lazy connection pool with `SemaphoreSlim`, auto-recovery |
 | `RabbitMQPublisher` | Single + batch publish, publisher confirmations, OTel tracing |
 | `RabbitMQConsumer` | Async event-driven consumption, DLQ retry queues, JSON deserialization |
-| `LilHermesTelemetry` | OTel `ActivitySource` and `Meter` definitions, semantic tag constants |
+| `LilHermesTelemetry` | `System.Diagnostics` `ActivitySource` and `Meter` definitions, semantic tag constants |
 
 ### Data Flow
 
@@ -57,5 +61,6 @@ Two projects ship as NuGet packages (both `netstandard2.0`):
 
 ### Testing Notes
 
-- Unit test mocks (`RabbitMqPublisherTests`, `BatchTest`) are currently commented out; `EndToEndTests` is the active test and requires a live RabbitMQ broker and an OTLP HTTP exporter at `http://localhost:4318`.
+- Unit tests (`RabbitMqPublisherTests`, `LilHermesTelemetryTests`) run without external services.
+- Integration tests (`EndToEndTests`, `DlqDirectRetryTests`) require a live RabbitMQ broker at `localhost`. `EndToEndTests` also exports to an OTLP HTTP collector at `http://localhost:4318`, but it passes without one: it asserts the `Publish`/`Consume` activities through an `ActivityListener`. `BatchTest` is commented out.
 - Test projects target `net8.0`; source projects target `netstandard2.0`.

@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace LilHermes.IntegrationTests
@@ -16,12 +17,16 @@ namespace LilHermes.IntegrationTests
     public class EndToEndTests : IAsyncLifetime
     {
         private ServiceProvider _serviceProvider;
+        private ActivityListener? _activityListener;
+        private readonly ConcurrentBag<string> _recordedActivities = new();
+        private const string SERVICE_NAME = "LilHermes.E2E";
         private const string TEST_EXCHANGE = "e2e-exchange";
         private const string TEST_QUEUE = "e2e-queue";
         private const string TEST_ROUTING_KEY = "e2e.test";
 
         public async Task DisposeAsync()
         {
+            _activityListener?.Dispose();
             _tracerProvider?.Dispose();
             if (_serviceProvider != null)
             {
@@ -37,7 +42,16 @@ namespace LilHermes.IntegrationTests
 
             var services = new ServiceCollection();
 
-            const string serviceName = "LilHermes.E2E";
+            const string serviceName = SERVICE_NAME;
+
+            // Registra las actividades de LilHermes sin pasar por OpenTelemetry
+            _activityListener = new ActivityListener
+            {
+                ShouldListenTo = source => source.Name == SERVICE_NAME,
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+                ActivityStopped = activity => _recordedActivities.Add(activity.OperationName)
+            };
+            ActivitySource.AddActivityListener(_activityListener);
 
             services.AddLogging(builder =>
             {
@@ -52,7 +66,7 @@ namespace LilHermes.IntegrationTests
                         .SetResourceBuilder(
                             ResourceBuilder.CreateDefault()
                                 .AddService(serviceName))
-                        .AddLilHermesInstrumentation(serviceName)
+                        .AddSource(serviceName)
                         .AddConsoleExporter()
                         .SetSampler(new AlwaysOnSampler())
                         //.AddOtlpExporter(opt =>
@@ -151,6 +165,10 @@ namespace LilHermes.IntegrationTests
 
             await Task.Delay(TimeSpan.FromSeconds(5));
             await consumer.StopConsumingAsync();
+
+            _recordedActivities.Should().Contain(
+                new[] { $"{SERVICE_NAME}.Publish", $"{SERVICE_NAME}.Consume" },
+                "LilHermes debe emitir las actividades de publicación y consumo");
         }
     }
 }

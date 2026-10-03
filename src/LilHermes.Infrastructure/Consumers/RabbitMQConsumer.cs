@@ -116,13 +116,15 @@ namespace LilHermes.Infrastructure.Consumers
 
                         if (context == null)
                         {
-                            _logger.LogError("Failed to deserialize message context");
+                            _logger.LogError("Failed to deserialize message context for {MessageId} (delivery {DeliveryTag})",
+                                args.BasicProperties?.MessageId, args.DeliveryTag);
                             throw new ArgumentException("Failed to deserialize message context");
                         }
 
                         if (context.Data == null)
                         {
-                            _logger.LogError("Failed to deserialize message data");
+                            _logger.LogError("Failed to deserialize message data for {MessageId} (delivery {DeliveryTag})",
+                                context.MessageId, args.DeliveryTag);
                             throw new ArgumentException("Failed to deserialize message data");
                         }
 
@@ -149,7 +151,8 @@ namespace LilHermes.Infrastructure.Consumers
                             {
                                 processActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                                 processActivity?.AddExceptionCompat(ex);
-                                _logger.LogError(ex, "Error in message handler business logic");
+                                _logger.LogError("Error in message handler business logic for {MessageId} (delivery {DeliveryTag})",
+                                    context.MessageId, args.DeliveryTag);
                                 throw;
                             }
                         }
@@ -162,32 +165,51 @@ namespace LilHermes.Infrastructure.Consumers
                     {
                         _telemetry.MessagesFailed.Add(1);
 
-                        if (!autoAck)
+                        var messageId = args.BasicProperties?.MessageId;
+
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        activity?.AddExceptionCompat(ex);
+                        _logger.LogError(ex, "Error processing message {MessageId} (delivery {DeliveryTag})",
+                            messageId, args.DeliveryTag);
+
+                        if (autoAck)
+                        {
+                            _logger.LogWarning("Message {MessageId} (delivery {DeliveryTag}) was auto-acknowledged; it will not be retried or sent to DLQ",
+                                messageId, args.DeliveryTag);
+                            return;
+                        }
+
+                        try
                         {
                             if (_options.ConsumerOptions.EnableDLQ)
                             {
-                                long deathCount = GetDeathCount(args.BasicProperties.Headers);
+                                long deathCount = GetDeathCount(args.BasicProperties?.Headers);
                                 if (deathCount >= _options.ConsumerOptions.MaxRetryCount)
                                 {
-                                    _logger.LogCritical("Excessive retries ({MaxRetryCount}). Moved to parked queue", _options.ConsumerOptions.MaxRetryCount);
                                     await PublishToParkedAsync(args);
                                     await AckAsync(args.DeliveryTag);
+                                    _logger.LogCritical("Message {MessageId} (delivery {DeliveryTag}) exceeded {MaxRetryCount} retries. Moved to parked queue {ParkedQueue}",
+                                        messageId, args.DeliveryTag, _options.ConsumerOptions.MaxRetryCount, _queueStructure.ParkedQueue);
                                 }
                                 else
                                 {
-                                    _logger.LogWarning("Retry {RetryCount} of {MaxRetryCount}. Requeueing message", deathCount + 1, _options.ConsumerOptions.MaxRetryCount);
                                     await NackAsync(args.DeliveryTag, requeue: false);
+                                    _logger.LogWarning("Message {MessageId} (delivery {DeliveryTag}) sent to retry queue {RetryQueue}. Retry {RetryCount} of {MaxRetryCount} in {RetryDelayMs} ms",
+                                        messageId, args.DeliveryTag, _queueStructure.RetryQueue, deathCount + 1, _options.ConsumerOptions.MaxRetryCount, _options.ConsumerOptions.MessageTTL);
                                 }
                             }
                             else
                             {
                                 await NackAsync(args.DeliveryTag, true);
+                                _logger.LogWarning("Message {MessageId} (delivery {DeliveryTag}) requeued to {Queue} (DLQ disabled)",
+                                    messageId, args.DeliveryTag, _options.ConsumerOptions.QueueName);
                             }
                         }
-
-                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                        activity?.AddExceptionCompat(ex);
-                        _logger.LogError(ex, "Error processing message");
+                        catch (Exception dlqEx)
+                        {
+                            _logger.LogCritical(dlqEx, "Failed to route message {MessageId} (delivery {DeliveryTag}) to retry/DLQ after processing error",
+                                messageId, args.DeliveryTag);
+                        }
                     }
                 }
             };
@@ -276,7 +298,19 @@ namespace LilHermes.Infrastructure.Consumers
                 };
                 await _channel.ExchangeDeclareAsync(_queueStructure.RetryExchange, _options.ConsumerOptions.ExchangeType.ToRabbitString(), durable: true);
                 await _channel.QueueDeclareAsync(_queueStructure.RetryQueue, durable: true, exclusive: false, autoDelete: false, arguments: retryArgs);
-                await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, "#");
+                // In a direct exchange "#" is not a wildcard: bind the retry queue with the same
+                // routing keys as the main queue so dead-lettered messages are not dropped
+                if (_options.ConsumerOptions.ExchangeType == RabbitMQExchangeType.Direct)
+                {
+                    foreach (var routingKey in _options.ConsumerOptions.RoutingKeys)
+                    {
+                        await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, routingKey);
+                    }
+                }
+                else
+                {
+                    await _channel.QueueBindAsync(_queueStructure.RetryQueue, _queueStructure.RetryExchange, "#");
+                }
 
                 queueArgs = new Dictionary<string, object>
                 {
@@ -298,14 +332,15 @@ namespace LilHermes.Infrastructure.Consumers
 
         private long GetDeathCount(IDictionary<string, object> headers)
         {
-            if (headers != null && headers.ContainsKey("x-death"))
+            if (headers != null
+                && headers.TryGetValue("x-death", out var xDeath)
+                && xDeath is IList<object> deathList
+                && deathList.Count > 0
+                && deathList[0] is IDictionary<string, object> deathEntry
+                && deathEntry.TryGetValue("count", out var count)
+                && count != null)
             {
-                var deathList = (IList<object>)headers["x-death"];
-                if (deathList.Count > 0)
-                {
-                    var deathEntry = (IDictionary<string, object>)deathList[0];
-                    return (long)deathEntry["count"];
-                }
+                return Convert.ToInt64(count);
             }
             return 0;
         }
